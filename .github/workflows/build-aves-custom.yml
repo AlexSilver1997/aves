@@ -61,7 +61,7 @@ jobs:
           set +o pipefail
           yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null
           yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" \
-            "platforms;android-37" \
+            "platforms;android-37.0" \
             "build-tools;37.0.0" \
             "ndk;28.2.13676358" >/dev/null
           set -o pipefail
