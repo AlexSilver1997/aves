@@ -1,0 +1,230 @@
+name: Build Aves Custom APK (IzzyOnDroid)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and verify signed ARM64 APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out Aves source and Flutter submodule
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up Java 21
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          if [[ ! -d "$SDK_ROOT" ]]; then
+            echo "Android SDK directory not found: $SDK_ROOT" >&2
+            exit 1
+          fi
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+
+          OLD_SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [[ ! -x "$OLD_SDKMANAGER" ]]; then
+            OLD_SDKMANAGER="$(command -v sdkmanager || true)"
+          fi
+          if [[ -z "$OLD_SDKMANAGER" || ! -x "$OLD_SDKMANAGER" ]]; then
+            echo "Android sdkmanager was not found." >&2
+            exit 1
+          fi
+
+          # Accept licenses and install a recent SDK Manager. Version 22.0
+          # handles Android 37's major.minor platform package IDs.
+          set +o pipefail
+          yes | "$OLD_SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null
+          yes | "$OLD_SDKMANAGER" --sdk_root="$SDK_ROOT" "cmdline-tools;22.0" >/dev/null
+          set -o pipefail
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/22.0/bin/sdkmanager"
+          if [[ ! -x "$SDKMANAGER" ]]; then
+            echo "Could not install Android SDK command-line tools 22.0." >&2
+            exit 1
+          fi
+
+          set +o pipefail
+          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null
+          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" \
+            "platforms;android-37" \
+            "build-tools;37.0.0" \
+            "ndk;28.2.13676358" >/dev/null
+          set -o pipefail
+
+          echo "ANDROID_NDK=$SDK_ROOT/ndk/28.2.13676358" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$SDK_ROOT/ndk/28.2.13676358" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$SDK_ROOT/ndk/28.2.13676358" >> "$GITHUB_ENV"
+
+      - name: Unpack reviewed source patch and encrypted signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+          ASSET_ZIP="$GITHUB_WORKSPACE/aves_custom_build_assets.zip"
+          DEST="$RUNNER_TEMP/aves_custom_assets"
+          if [[ ! -s "$ASSET_ZIP" ]]; then
+            echo "Missing aves_custom_build_assets.zip in the repository root." >&2
+            exit 1
+          fi
+          mkdir -p "$DEST"
+          python3 - "$ASSET_ZIP" "$DEST" <<'PY'
+          import pathlib
+          import sys
+          import zipfile
+
+          archive = pathlib.Path(sys.argv[1])
+          destination = pathlib.Path(sys.argv[2]).resolve()
+          required = {
+              "aves_custom.patch",
+              "aves-custom-release.jks.gpg",
+          }
+          with zipfile.ZipFile(archive) as zf:
+              names = set(zf.namelist())
+              if names != required:
+                  raise SystemExit(
+                      "Build assets ZIP must contain exactly: " + ", ".join(sorted(required))
+                  )
+              for info in zf.infolist():
+                  target = (destination / info.filename).resolve()
+                  if target.parent != destination or info.is_dir():
+                      raise SystemExit("Unsafe or unexpected path in build assets ZIP")
+                  if info.file_size > 200_000:
+                      raise SystemExit("Unexpectedly large build asset")
+                  target.write_bytes(zf.read(info))
+          PY
+          cp "$DEST/aves_custom.patch" "$GITHUB_WORKSPACE/aves_custom.patch"
+          cp "$DEST/aves-custom-release.jks.gpg" "$GITHUB_WORKSPACE/aves-custom-release.jks.gpg"
+
+      - name: Apply the Aves Custom feature patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git apply --reverse --check aves_custom.patch >/dev/null 2>&1; then
+            echo "The Aves Custom patch is already present in this source tree."
+          else
+            git apply --check aves_custom.patch
+            git apply aves_custom.patch
+          fi
+          git diff --check
+
+      - name: Set a separate Android application ID
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("android/app/build.gradle.kts")
+          source = path.read_text(encoding="utf-8")
+          old = "        applicationId = packageName"
+          new = '        applicationId = System.getenv("AVES_CUSTOM_APPLICATION_ID")?.takeIf { it.isNotBlank() } ?: packageName'
+          if source.count(old) != 1:
+              raise SystemExit("Could not safely locate the expected applicationId line; refusing to edit Gradle file.")
+          path.write_text(source.replace(old, new), encoding="utf-8")
+          PY
+
+      - name: Select the IzzyOnDroid flavor and prepare Flutter
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/apply_flavor_izzy.sh
+          ./flutterw gen-l10n
+          ./flutterw doctor -v
+
+      - name: Run Dart and Flutter checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./flutterw analyze
+          ./flutterw test
+
+      - name: Decrypt and verify the persistent signing key
+        shell: bash
+        env:
+          AVES_CUSTOM_KEYSTORE_PASSPHRASE: ${{ secrets.AVES_CUSTOM_KEYSTORE_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${AVES_CUSTOM_KEYSTORE_PASSPHRASE:-}" ]]; then
+            echo "Missing Actions secret AVES_CUSTOM_KEYSTORE_PASSPHRASE." >&2
+            exit 1
+          fi
+          PASS_FILE="$RUNNER_TEMP/aves-keystore-passphrase.txt"
+          KEY_FILE="$RUNNER_TEMP/aves-custom-release.jks"
+          umask 077
+          printf '%s' "$AVES_CUSTOM_KEYSTORE_PASSPHRASE" > "$PASS_FILE"
+          gpg --batch --yes --quiet --pinentry-mode loopback \
+            --passphrase-file "$PASS_FILE" \
+            --output "$KEY_FILE" \
+            --decrypt "$GITHUB_WORKSPACE/aves-custom-release.jks.gpg"
+          rm -f "$PASS_FILE"
+
+          keytool -list -keystore "$KEY_FILE" \
+            -storepass "$AVES_CUSTOM_KEYSTORE_PASSPHRASE" \
+            -alias aves-custom >/dev/null
+          {
+            echo "AVES_STORE_FILE=$KEY_FILE"
+            echo "AVES_STORE_PASSWORD=$AVES_CUSTOM_KEYSTORE_PASSPHRASE"
+            echo "AVES_KEY_ALIAS=aves-custom"
+            echo "AVES_KEY_PASSWORD=$AVES_CUSTOM_KEYSTORE_PASSPHRASE"
+          } >> "$GITHUB_ENV"
+
+      - name: Build signed IzzyOnDroid ARM64 APK
+        shell: bash
+        env:
+          AVES_CUSTOM_APPLICATION_ID: deckers.thibault.aves.custom
+        run: |
+          set -euo pipefail
+          BUILD_NUMBER=$((184 + GITHUB_RUN_NUMBER))
+          BUILD_NAME="1.15.10-custom.${GITHUB_RUN_NUMBER}"
+          ./flutterw build apk \
+            --flavor izzy \
+            -t lib/main_izzy.dart \
+            --release \
+            --split-per-abi \
+            --build-name="$BUILD_NAME" \
+            --build-number="$BUILD_NUMBER"
+
+          APK="$(find build/app/outputs -type f -name '*arm64-v8a*.apk' -print -quit)"
+          if [[ -z "$APK" || ! -s "$APK" ]]; then
+            echo "No ARM64 APK was found in the build outputs." >&2
+            find build/app/outputs -type f -name '*.apk' -print || true
+            exit 1
+          fi
+
+          APKSIGNER="$ANDROID_SDK_ROOT/build-tools/37.0.0/apksigner"
+          AAPT="$ANDROID_SDK_ROOT/build-tools/37.0.0/aapt"
+          SIGNATURE_INFO="$("$APKSIGNER" verify --verbose --print-certs "$APK" 2>&1)"
+          printf '%s\n' "$SIGNATURE_INFO"
+          EXPECTED_CERT_SHA256="0E88F5BE0FC0B3C5C3A993AAB6418FA8D321A7B2CA2BF878943C1770D6DC8F56"
+          ACTUAL_CERT_SHA256="$(printf '%s\n' "$SIGNATURE_INFO" | sed -n 's/.*SHA-256 digest: //p' | head -n 1 | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]')"
+          if [[ "$ACTUAL_CERT_SHA256" != "$(printf '%s' "$EXPECTED_CERT_SHA256" | tr '[:upper:]' '[:lower:]')" ]]; then
+            echo "APK signature does not match the persistent Aves Custom certificate." >&2
+            exit 1
+          fi
+          "$AAPT" dump badging "$APK" | grep -F "package: name='deckers.thibault.aves.custom'"
+          mkdir -p dist
+          cp "$APK" dist/aves-custom-arm64.apk
+          sha256sum dist/aves-custom-arm64.apk
+          rm -f "$AVES_STORE_FILE"
+
+      - name: Upload the installable ARM64 APK
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: aves-custom-arm64
+          path: dist/aves-custom-arm64.apk
+          if-no-files-found: error
+          retention-days: 7
