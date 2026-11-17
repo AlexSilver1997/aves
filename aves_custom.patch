@@ -1,0 +1,1315 @@
+diff --git a/.gitignore b/.gitignore
+index 7752ba6..6bb62da 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -53,3 +53,8 @@ app.*.map.json
+ 
+ # Widget Preview related
+ .widget_preview/
++
++# Custom release signing material (never commit private keys or passwords)
++/android/key.properties
++/android/*.jks
++/android/*.keystore
+diff --git a/CUSTOM_BUILD.md b/CUSTOM_BUILD.md
+new file mode 100644
+index 0000000..1d460cf
+--- /dev/null
++++ b/CUSTOM_BUILD.md
+@@ -0,0 +1,58 @@
++# Aves Custom build and update notes
++
++This working tree is based on Aves `1.15.10+184` / Flutter `3.47.8`. The personal custom build uses the `izzy` product flavor with application ID `deckers.thibault.aves.custom`, so it installs alongside the official Aves app.
++
++## Important installation/signing warning
++
++The official Aves release is signed with the upstream developer's private signing key. This project does not contain that key. Android requires both the application ID and signing certificate to match for an in-place update. This build deliberately uses a different application ID (`deckers.thibault.aves.custom`), so the official app remains installed and untouched. The custom build can then be updated over itself as long as every future build uses the same private keystore and alias.
++
++**Do not lose the custom keystore.** If it is lost, Android will not accept future APKs as updates to this custom installation. Never commit the keystore or `android/key.properties` to GitHub.
++
++## Build prerequisites
++
++- Flutter SDK `3.47.8`
++- Build variant: `izzyRelease` (without the upstream Play/Firebase registration)
++- Android SDK with platform 37 and the build tools/NDK required by the Flutter/Gradle setup
++- Java 21 (Temurin/Adoptium is the configured toolchain vendor)
++- Network access for `flutter pub get`, Maven/Gradle and Git-based Dart dependencies
++- A persistent release keystore
++- An optional Google Maps API key if Google-backed map functionality is required; without it the Gradle config uses the `NONE` fallback
++
++## Configure signing
++
++1. Use the separately supplied `aves-custom-release.jks` signing key. Copy it to `android/aves-custom-release.jks`.
++2. Copy `android/key.properties.example` to `android/key.properties`.
++3. Set `storeFile=../aves-custom-release.jks`, `keyAlias=aves-custom`, and enter the supplied store/key password in both password fields. The path is resolved from the Android app Gradle project directory.
++4. Keep at least two secure backups of the keystore and its credentials, stored separately. The password is not included in the source patch.
++
++If you choose to generate a different key instead, do it only before the first custom installation. For example:
++
++```bash
++keytool -genkeypair -v -keystore android/aves-custom-release.jks -storetype JKS -storepass CHANGE_ME -keypass CHANGE_ME -alias aves-custom -keyalg RSA -keysize 4096 -validity 10000 -dname "CN=Aves Custom Release"
++```
++
++## Build
++
++From the project root run:
++
++```bash
++./scripts/build_custom_apk.sh
++```
++
++The script runs `flutter analyze`, `flutter test`, then builds the `izzyRelease` APK. The expected output is `build/app/outputs/flutter-apk/app-izzy-release.apk`.
++
++## Updating from a future Aves source snapshot
++
++This source patch is for the supplied `1.15.10+184` tree. For a later upstream version:
++
++1. Start from a clean copy of the new upstream source.
++2. Apply `aves_custom.patch` with `git apply --check aves_custom.patch`, then `git apply aves_custom.patch`.
++3. Resolve any reported conflicts by reviewing the new upstream implementation; do not force-apply blindly.
++4. Increment the `+buildNumber` in `pubspec.yaml` above the version currently installed on the device.
++5. Run the full analyze/test/build script and verify the APK signature is the same key as previous custom releases.
++
++A source patch is not a binary patch and cannot safely be applied to an arbitrary APK. Every release must be rebuilt from source.
++
++## Verification status for this handoff
++
++The source changes were reviewed statically and JSON/l10n files were syntax-checked. `flutter analyze`, `flutter test`, Gradle build, Android install and runtime testing have **not** been run in the current workspace because Flutter/Dart and Android SDK are not installed here and the environment cannot reach SDK distribution hosts. Do not treat this source patch as a tested APK release until those checks pass.
+diff --git a/android/app/build.gradle.kts b/android/app/build.gradle.kts
+index 7d2f43e..fc0b047 100644
+--- a/android/app/build.gradle.kts
++++ b/android/app/build.gradle.kts
+@@ -98,10 +98,10 @@ android {
+         }
+ 
+         create("izzy") {
+-            // IzzyOnDroid
+-            // check offending libraries with `scanapk`
+-            // cf https://android.izzysoft.de/articles/named/app-modules-2
++            // IzzyOnDroid-compatible build for personal Aves Custom installation.
++            // This flavor avoids the upstream Play/Firebase app registration.
+             dimension = "store"
++            applicationIdSuffix = ".custom"
+         }
+ 
+         create("libre") {
+diff --git a/android/key.properties.example b/android/key.properties.example
+new file mode 100644
+index 0000000..8c0cff3
+--- /dev/null
++++ b/android/key.properties.example
+@@ -0,0 +1,8 @@
++# Copy this file to android/key.properties and fill in your own values.
++# Keep key.properties and the keystore outside version control.
++storeFile=../aves-custom-release.jks
++storePassword=CHANGE_ME
++keyAlias=aves-custom
++keyPassword=CHANGE_ME
++# Optional Google Maps API key:
++# googleApiKey=YOUR_API_KEY
+diff --git a/flavors/pubspec_izzy.yaml b/flavors/pubspec_izzy.yaml
+index 4224f08..abc09df 100644
+--- a/flavors/pubspec_izzy.yaml
++++ b/flavors/pubspec_izzy.yaml
+@@ -8,7 +8,7 @@ publish_to: none
+ # - edit GitHub changelog:     /CHANGELOG.md
+ # - edit Play Store changelog: /whatsnew/whatsnew-en-US
+ # - run `scripts/apply_version_bump.sh`
+-version: 1.15.10+184
++version: 1.15.10-custom.1+185
+ 
+ environment:
+   # this project bundles Flutter SDK via `flutter_wrapper`
+diff --git a/lib/l10n/app_en.arb b/lib/l10n/app_en.arb
+index 415541f..91f7680 100644
+--- a/lib/l10n/app_en.arb
++++ b/lib/l10n/app_en.arb
+@@ -162,7 +162,10 @@
+   "viewerActionLock": "Lock viewer",
+   "viewerActionUnlock": "Unlock viewer",
+ 
++  "slideshowActionPrevious": "Previous photo",
+   "slideshowActionResume": "Resume",
++  "slideshowActionNext": "Next photo",
++  "slideshowActionInterval": "Change interval",
+   "slideshowActionShowInCollection": "Show in Collection",
+ 
+   "entryInfoActionEditDate": "Edit date & time",
+@@ -789,10 +792,13 @@
+   "drawerTagPage": "Tags",
+ 
+   "sortByDate": "By date",
++  "sortByDateAdded": "Date added",
++  "sortByDateModified": "Date modified",
++  "sortByFormat": "File format",
+   "sortByName": "By name",
+   "sortByItemCount": "By item count",
+   "sortBySize": "By size",
+-  "sortByAlbumFileName": "By album & item title",
++  "sortByAlbumFileName": "File name",
+   "sortByRating": "By rating",
+   "sortByDuration": "By duration",
+   "sortByPath": "By path",
+diff --git a/lib/l10n/app_ru.arb b/lib/l10n/app_ru.arb
+index 3381f7c..37dfca4 100644
+--- a/lib/l10n/app_ru.arb
++++ b/lib/l10n/app_ru.arb
+@@ -318,7 +318,7 @@
+     "sortByName": "По названию",
+     "sortByItemCount": "По количеству объектов",
+     "sortBySize": "По размеру",
+-    "sortByAlbumFileName": "По названию альбома и пункта",
++    "sortByAlbumFileName": "По имени файла",
+     "sortByRating": "По рейтингу",
+     "sortOrderNewestFirst": "Сначала новые",
+     "sortOrderOldestFirst": "Сначала старые",
+@@ -762,5 +762,11 @@
+     "filterCredentialsValidityTrustedLabel": "Доверенный",
+     "exportEntryDialogDimension": "Размер:",
+     "sortRandomly": "Случайно",
+-    "aboutCreditsStateFlags": "Государственные флаги взяты с Wikimedia Commons. Они находятся в общественном достоянии, за исключением:"
++    "aboutCreditsStateFlags": "Государственные флаги взяты с Wikimedia Commons. Они находятся в общественном достоянии, за исключением:",
++    "sortByDateAdded": "По дате добавления",
++    "sortByDateModified": "По дате изменения",
++    "sortByFormat": "По формату файла",
++    "slideshowActionPrevious": "Предыдущее фото",
++    "slideshowActionNext": "Следующее фото",
++    "slideshowActionInterval": "Интервал показа"
+ }
+diff --git a/lib/model/entry/sort.dart b/lib/model/entry/sort.dart
+index e0e5573..7396708 100644
+--- a/lib/model/entry/sort.dart
++++ b/lib/model/entry/sort.dart
+@@ -1,23 +1,62 @@
+ import 'package:aves/model/entry/entry.dart';
+-import 'package:aves/utils/time_utils.dart';
++import 'package:aves_utils/aves_utils.dart';
+ import 'package:collection/collection.dart';
+ 
+ class AvesEntrySort {
+-  // compare by:
+-  // 1) title ascending
+-  // 2) extension ascending
+-  static int compareByName(AvesEntry a, AvesEntry b) {
+-    final c = compareAsciiUpperCaseNatural(a.bestTitle ?? '', b.bestTitle ?? '');
+-    return c != 0 ? c : compareAsciiUpperCase(a.extension ?? '', b.extension ?? '');
++  // Compare by the complete filesystem filename (not the embedded XMP title).
++  // Entries without a path are kept after entries with a real file name.
++  static int compareByName(AvesEntry a, AvesEntry b, {bool reverse = false}) {
++    final aName = a.path != null ? pContext.basename(a.path!) : null;
++    final bName = b.path != null ? pContext.basename(b.path!) : null;
++    if (aName == null || aName.isEmpty) {
++      if (bName != null && bName.isNotEmpty) return 1;
++    } else if (bName == null || bName.isEmpty) {
++      return -1;
++    }
++
++    final c = compareAsciiUpperCaseNatural(aName ?? '', bName ?? '');
++    final tie = c == 0 ? compareAsciiUpperCase(a.uri, b.uri) : c;
++    return reverse ? -tie : tie;
+   }
+ 
+-  // compare by:
+-  // 1) date descending
+-  // 2) name descending
+-  static int compareByDate(AvesEntry a, AvesEntry b) {
+-    var c = (b.bestDate ?? epoch).compareTo(a.bestDate ?? epoch);
+-    if (c != 0) return c;
+-    return compareByName(b, a);
++  static int _compareNullableInt(int? a, int? b, {required bool reverse}) {
++    if (a == null) return b == null ? 0 : 1;
++    if (b == null) return -1;
++    return reverse ? a.compareTo(b) : b.compareTo(a);
++  }
++
++  static int _compareNullableString(String? a, String? b, {required bool reverse}) {
++    if (a == null || a.isEmpty) return (b == null || b.isEmpty) ? 0 : 1;
++    if (b == null || b.isEmpty) return -1;
++    final c = compareAsciiUpperCaseNatural(a, b);
++    return reverse ? -c : c;
++  }
++
++  static int compareByDateAdded(AvesEntry a, AvesEntry b, {bool reverse = false}) {
++    final aDate = (a.dateAddedSecs ?? 0) > 0 ? a.dateAddedSecs : null;
++    final bDate = (b.dateAddedSecs ?? 0) > 0 ? b.dateAddedSecs : null;
++    final c = _compareNullableInt(aDate, bDate, reverse: reverse);
++    return c != 0 ? c : compareByName(a, b, reverse: reverse);
++  }
++
++  static int compareByDateModified(AvesEntry a, AvesEntry b, {bool reverse = false}) {
++    final aDate = (a.dateModifiedMillis ?? 0) > 0 ? a.dateModifiedMillis : null;
++    final bDate = (b.dateModifiedMillis ?? 0) > 0 ? b.dateModifiedMillis : null;
++    final c = _compareNullableInt(aDate, bDate, reverse: reverse);
++    return c != 0 ? c : compareByName(a, b, reverse: reverse);
++  }
++
++  static int compareByFormat(AvesEntry a, AvesEntry b, {bool reverse = false}) {
++    final aFormat = a.extension?.replaceFirst('.', '').toLowerCase();
++    final bFormat = b.extension?.replaceFirst('.', '').toLowerCase();
++    final c = _compareNullableString(aFormat, bFormat, reverse: reverse);
++    return c != 0 ? c : compareByName(a, b, reverse: reverse);
++  }
++
++  // compare by date, with unknown dates always last in either direction.
++  static int compareByDate(AvesEntry a, AvesEntry b, {bool reverse = false}) {
++    final c = _compareNullableInt(a.bestDate?.millisecondsSinceEpoch, b.bestDate?.millisecondsSinceEpoch, reverse: reverse);
++    return c != 0 ? c : compareByName(a, b, reverse: reverse);
+   }
+ 
+   // compare by:
+@@ -28,20 +67,16 @@ class AvesEntrySort {
+     return c != 0 ? c : compareByDate(a, b);
+   }
+ 
+-  // compare by:
+-  // 1) size descending
+-  // 2) date descending
+-  static int compareBySize(AvesEntry a, AvesEntry b) {
+-    final c = (b.sizeBytes ?? 0).compareTo(a.sizeBytes ?? 0);
+-    return c != 0 ? c : compareByDate(a, b);
++  // compare by size, with unknown sizes always last in either direction.
++  static int compareBySize(AvesEntry a, AvesEntry b, {bool reverse = false}) {
++    final c = _compareNullableInt(a.sizeBytes, b.sizeBytes, reverse: reverse);
++    return c != 0 ? c : compareByDate(a, b, reverse: reverse);
+   }
+ 
+-  // compare by:
+-  // 1) duration descending
+-  // 2) date descending
+-  static int compareByDuration(AvesEntry a, AvesEntry b) {
+-    final c = (b.durationMillis ?? 0).compareTo(a.durationMillis ?? 0);
+-    return c != 0 ? c : compareByDate(a, b);
++  // compare by duration, with unknown durations always last in either direction.
++  static int compareByDuration(AvesEntry a, AvesEntry b, {bool reverse = false}) {
++    final c = _compareNullableInt(a.durationMillis, b.durationMillis, reverse: reverse);
++    return c != 0 ? c : compareByDate(a, b, reverse: reverse);
+   }
+ 
+   // compare by:
+diff --git a/lib/model/settings/modules/collection.dart b/lib/model/settings/modules/collection.dart
+index 707e4fa..57e6c54 100644
+--- a/lib/model/settings/modules/collection.dart
++++ b/lib/model/settings/modules/collection.dart
+@@ -1,4 +1,7 @@
++import 'dart:convert';
++
+ import 'package:aves/model/filters/filters.dart';
++import 'package:aves/model/filters/covered/stored_album.dart';
+ import 'package:aves/model/settings/defaults.dart';
+ import 'package:aves/model/settings/modules/common_layout.dart';
+ import 'package:aves/services/media/enums.dart';
+@@ -87,39 +90,107 @@ mixin CollectionSettings on SettingsAccess, CommonLayoutSettings {
+     setTileLayout(CollectionPage.routeName, newValue);
+   }
+ 
++  StoredAlbumFilter? _storedAlbumForSort(Set<CollectionFilter> filters) {
++    if (filters.length != 1) return null;
++    final filter = filters.first;
++    if (filter is StoredAlbumFilter && !filter.reversed) return filter;
++    return null;
++  }
++
++  Map<String, Object?> _storedAlbumSortMap() {
++    final encoded = getString(SettingKeys.collectionSortPerAlbumKey);
++    if (encoded == null || encoded.isEmpty) return {};
++    try {
++      final decoded = jsonDecode(encoded);
++      if (decoded is Map) {
++        return decoded.map((key, value) => MapEntry(key.toString(), value));
++      }
++    } catch (_) {
++      // Ignore malformed legacy/user-edited values and fall back to global sorting.
++    }
++    return {};
++  }
++
++  Map<String, Object?> _sortConfigForAlbum(StoredAlbumFilter album) {
++    final value = _storedAlbumSortMap()[album.album];
++    if (value is Map) return value.map((key, value) => MapEntry(key.toString(), value));
++    return {};
++  }
++
++  void _setAlbumSortValue(Set<CollectionFilter> filters, String field, Object value) {
++    final album = _storedAlbumForSort(filters);
++    if (album == null) return;
++
++    final all = _storedAlbumSortMap();
++    final config = _sortConfigForAlbum(album);
++    // Capture all global values on first customization so later global changes
++    // cannot partially alter an album's individual configuration.
++    config.putIfAbsent('sortFactor', () => _collectionSortFactor.name);
++    config.putIfAbsent('sortReverse', () => _collectionSortReverse);
++    config.putIfAbsent('sectionFactor', () => _collectionSectionFactor.name);
++    config[field] = value;
++    all[album.album] = config;
++    set(SettingKeys.collectionSortPerAlbumKey, jsonEncode(all));
++  }
++
++  void renameStoredCollectionSort(String oldAlbum, String newAlbum) {
++    if (oldAlbum == newAlbum) return;
++    final all = _storedAlbumSortMap();
++    final config = all.remove(oldAlbum);
++    if (config != null) {
++      all[newAlbum] = config;
++      set(SettingKeys.collectionSortPerAlbumKey, jsonEncode(all));
++    }
++  }
++
+   void setStoredCollectionSortFactor(Set<CollectionFilter> filters, SortFactor newValue) {
+-    // TODO TLAD [layout per album]
+-    _collectionSortFactor = newValue;
++    if (_storedAlbumForSort(filters) == null) {
++      _collectionSortFactor = newValue;
++    } else {
++      _setAlbumSortValue(filters, 'sortFactor', newValue.name);
++    }
+   }
+ 
+   void setStoredCollectionSortReverse(Set<CollectionFilter> filters, bool newValue) {
+-    // TODO TLAD [layout per album]
+-    _collectionSortReverse = newValue;
++    if (_storedAlbumForSort(filters) == null) {
++      _collectionSortReverse = newValue;
++    } else {
++      _setAlbumSortValue(filters, 'sortReverse', newValue);
++    }
+   }
+ 
+   void setStoredCollectionSectionFactor(Set<CollectionFilter> filters, EntrySectionFactor newValue) {
+-    // TODO TLAD [layout per album]
+-    _collectionSectionFactor = newValue;
++    if (_storedAlbumForSort(filters) == null) {
++      _collectionSectionFactor = newValue;
++    } else {
++      _setAlbumSortValue(filters, 'sectionFactor', newValue.name);
++    }
+   }
+ 
+   TileLayout getStoredCollectionTileLayout(Set<CollectionFilter> filters) {
+-    // TODO TLAD [layout per album]
++    // Tile layout intentionally remains global; only sorting and grouping are per album.
+     return getTileLayout(CollectionPage.routeName);
+   }
+ 
+   SortFactor getStoredCollectionSortFactor(Set<CollectionFilter> filters) {
+-    // TODO TLAD [layout per album]
+-    return _collectionSortFactor;
++    final album = _storedAlbumForSort(filters);
++    if (album == null) return _collectionSortFactor;
++    final value = _sortConfigForAlbum(album)['sortFactor'];
++    return SortFactor.values.firstWhere((v) => v.name == value, orElse: () => _collectionSortFactor);
+   }
+ 
+   bool getStoredCollectionSortReverse(Set<CollectionFilter> filters) {
+-    // TODO TLAD [layout per album]
+-    return _collectionSortReverse;
++    final album = _storedAlbumForSort(filters);
++    if (album == null) return _collectionSortReverse;
++    final value = _sortConfigForAlbum(album)['sortReverse'];
++    return value is bool ? value : _collectionSortReverse;
+   }
+ 
+   EntrySectionFactor getStoredCollectionSectionFactor(Set<CollectionFilter> filters) {
+-    // TODO TLAD [layout per album]
+-    return _collectionSectionFactor;
++    final album = _storedAlbumForSort(filters);
++    if (album == null) return _collectionSectionFactor;
++    final value = _sortConfigForAlbum(album)['sectionFactor'];
++    return EntrySectionFactor.values.firstWhere((v) => v.name == value, orElse: () => _collectionSectionFactor);
+   }
+ 
+   // composite (effective)
+@@ -151,6 +222,10 @@ mixin CollectionSettings on SettingsAccess, CommonLayoutSettings {
+         switch (getEffectiveCollectionSortFactor(filters)) {
+           case .date:
+             return getStoredCollectionSectionFactor(filters);
++          case .dateAdded:
++          case .dateModified:
++          case .format:
++            return .none;
+           case .albumItemName:
+           case .path:
+             return .name;
+diff --git a/lib/model/settings/settings.dart b/lib/model/settings/settings.dart
+index 1658502..c96fc80 100644
+--- a/lib/model/settings/settings.dart
++++ b/lib/model/settings/settings.dart
+@@ -422,6 +422,7 @@ class Settings
+           case SettingKeys.keepScreenOnKey:
+           case SettingKeys.homePageKey:
+           case SettingKeys.homeCustomExplorerPathKey:
++          case SettingKeys.collectionSortPerAlbumKey:
+           case SettingKeys.collectionSortFactorKey:
+           case SettingKeys.collectionSectionFactorKey:
+           case SettingKeys.thumbnailLocationIconKey:
+diff --git a/lib/model/source/collection_lens.dart b/lib/model/source/collection_lens.dart
+index ca9f571..0aa8ba9 100644
+--- a/lib/model/source/collection_lens.dart
++++ b/lib/model/source/collection_lens.dart
+@@ -147,15 +147,18 @@ class CollectionLens with ChangeNotifier {
+           case .rating:
+             throw UnimplementedError();
+         }
++      case .dateAdded:
++      case .dateModified:
++      case .format:
++      case .size:
++      case .duration:
++      case .random:
++        return false;
+       case .albumItemName:
+       case .path:
+         return showAlbumHeaders();
+       case .rating:
+         return !filters.any((f) => f is RatingFilter);
+-      case .size:
+-      case .duration:
+-      case .random:
+-        return false;
+       case .chipName:
+       case .count:
+         throw UnimplementedError();
+@@ -283,15 +286,21 @@ class CollectionLens with ChangeNotifier {
+ 
+     switch (sortFactor) {
+       case .date:
+-        _filteredSortedEntries.sort(AvesEntrySort.compareByDate);
++        _filteredSortedEntries.sort((a, b) => AvesEntrySort.compareByDate(a, b, reverse: sortReverse));
++      case .dateAdded:
++        _filteredSortedEntries.sort((a, b) => AvesEntrySort.compareByDateAdded(a, b, reverse: sortReverse));
++      case .dateModified:
++        _filteredSortedEntries.sort((a, b) => AvesEntrySort.compareByDateModified(a, b, reverse: sortReverse));
++      case .format:
++        _filteredSortedEntries.sort((a, b) => AvesEntrySort.compareByFormat(a, b, reverse: sortReverse));
+       case .albumItemName:
+-        _filteredSortedEntries.sort(AvesEntrySort.compareByName);
++        _filteredSortedEntries.sort((a, b) => AvesEntrySort.compareByName(a, b, reverse: sortReverse));
+       case .rating:
+         _filteredSortedEntries.sort(AvesEntrySort.compareByRating);
+       case .size:
+-        _filteredSortedEntries.sort(AvesEntrySort.compareBySize);
++        _filteredSortedEntries.sort((a, b) => AvesEntrySort.compareBySize(a, b, reverse: sortReverse));
+       case .duration:
+-        _filteredSortedEntries.sort(AvesEntrySort.compareByDuration);
++        _filteredSortedEntries.sort((a, b) => AvesEntrySort.compareByDuration(a, b, reverse: sortReverse));
+       case .path:
+         _filteredSortedEntries.sort(AvesEntrySort.compareByPath);
+       case .random:
+@@ -302,7 +311,9 @@ class CollectionLens with ChangeNotifier {
+       case .count:
+         throw UnimplementedError();
+     }
+-    if (sortReverse) {
++    // The new comparators handle direction internally so entries with missing
++    // metadata remain last in both directions.
++    if (sortReverse && sortFactor != .date && sortFactor != .dateAdded && sortFactor != .dateModified && sortFactor != .format && sortFactor != .albumItemName && sortFactor != .size && sortFactor != .duration) {
+       _filteredSortedEntries = _filteredSortedEntries.reversed.toList();
+     }
+   }
+@@ -348,6 +359,9 @@ class CollectionLens with ChangeNotifier {
+           sections = SplayTreeMap<EntryAlbumSectionKey, List<AvesEntry>>.of(byAlbum, compare);
+         case .rating:
+           sections = groupBy<AvesEntry, EntryRatingSectionKey>(_filteredSortedEntries, (entry) => EntryRatingSectionKey(entry.rating));
++        case .dateAdded:
++        case .dateModified:
++        case .format:
+         case .size:
+         case .duration:
+         case .random:
+@@ -393,6 +407,7 @@ class CollectionLens with ChangeNotifier {
+       SettingKeys.collectionBurstPatternsKey,
+       SettingKeys.tileLayoutPrefixKey + CollectionPage.routeName,
+       SettingKeys.collectionSortFactorKey,
++      SettingKeys.collectionSortPerAlbumKey,
+       SettingKeys.collectionSortReverseKey,
+       SettingKeys.collectionSortRandomSeedKey,
+       SettingKeys.collectionSectionFactorKey,
+diff --git a/lib/model/source/collection_source.dart b/lib/model/source/collection_source.dart
+index f977b81..453a651 100644
+--- a/lib/model/source/collection_source.dart
++++ b/lib/model/source/collection_source.dart
+@@ -318,6 +318,7 @@ abstract class CollectionSource with SourceBase, AlbumMixin, CountryMixin, Place
+     }
+ 
+     final existingCover = covers.of(oldFilter);
++    settings.renameStoredCollectionSort(sourceAlbum, destinationAlbum);
+     await covers.set(
+       filter: newFilter,
+       entryId: existingCover?.entryId,
+diff --git a/lib/view/src/actions/slideshow.dart b/lib/view/src/actions/slideshow.dart
+index 50d6875..26a36f7 100644
+--- a/lib/view/src/actions/slideshow.dart
++++ b/lib/view/src/actions/slideshow.dart
+@@ -7,7 +7,10 @@ extension ExtraSlideshowActionView on SlideshowAction {
+   String getText(BuildContext context) {
+     final l10n = context.l10n;
+     return switch (this) {
++      .previous => l10n.slideshowActionPrevious,
+       .resume => l10n.slideshowActionResume,
++      .next => l10n.slideshowActionNext,
++      .interval => l10n.slideshowActionInterval,
+       .showInCollection => l10n.slideshowActionShowInCollection,
+       .cast => l10n.entryActionCast,
+       .settings => l10n.viewerActionSettings,
+@@ -18,7 +21,10 @@ extension ExtraSlideshowActionView on SlideshowAction {
+ 
+   IconData _getIconData() {
+     return switch (this) {
++      .previous => AIcons.previous,
+       .resume => AIcons.play,
++      .next => AIcons.next,
++      .interval => AIcons.duration,
+       .showInCollection => AIcons.allCollection,
+       .cast => AIcons.cast,
+       .settings => AIcons.settings,
+diff --git a/lib/view/src/source/sort.dart b/lib/view/src/source/sort.dart
+index 09aa879..7d7a722 100644
+--- a/lib/view/src/source/sort.dart
++++ b/lib/view/src/source/sort.dart
+@@ -9,6 +9,9 @@ extension ExtraEntrySortFactorView on SortFactor {
+     final l10n = context.l10n;
+     return switch (this) {
+       .date => l10n.sortByDate,
++      .dateAdded => l10n.sortByDateAdded,
++      .dateModified => l10n.sortByDateModified,
++      .format => l10n.sortByFormat,
+       .chipName => l10n.sortByName,
+       .albumItemName => l10n.sortByAlbumFileName,
+       .count => l10n.sortByItemCount,
+@@ -23,6 +26,9 @@ extension ExtraEntrySortFactorView on SortFactor {
+   IconData get icon {
+     return switch (this) {
+       .date => AIcons.date,
++      .dateAdded => AIcons.date,
++      .dateModified => AIcons.date,
++      .format => AIcons.mimeType,
+       .chipName => AIcons.name,
+       .albumItemName => AIcons.name,
+       .count => AIcons.count,
+@@ -37,8 +43,8 @@ extension ExtraEntrySortFactorView on SortFactor {
+   String getOrderName(BuildContext context, bool reverse) {
+     final l10n = context.l10n;
+     return switch (this) {
+-      .date => reverse ? l10n.sortOrderOldestFirst : l10n.sortOrderNewestFirst,
+-      .chipName || .albumItemName || .path => reverse ? l10n.sortOrderZtoA : l10n.sortOrderAtoZ,
++      .date || .dateAdded || .dateModified => reverse ? l10n.sortOrderOldestFirst : l10n.sortOrderNewestFirst,
++      .format || .chipName || .albumItemName || .path => reverse ? l10n.sortOrderZtoA : l10n.sortOrderAtoZ,
+       .count || .size => reverse ? l10n.sortOrderSmallestFirst : l10n.sortOrderLargestFirst,
+       .rating => reverse ? l10n.sortOrderLowestFirst : l10n.sortOrderHighestFirst,
+       .duration => reverse ? l10n.sortOrderShortestFirst : l10n.sortOrderLongestFirst,
+diff --git a/lib/widgets/collection/app_bar.dart b/lib/widgets/collection/app_bar.dart
+index 3c1ffea..ff80482 100644
+--- a/lib/widgets/collection/app_bar.dart
++++ b/lib/widgets/collection/app_bar.dart
+@@ -61,7 +61,10 @@ class const CollectionAppBar({
+ 
+   static const sortOptions = <SortFactor>[
+     .date,
++    .dateAdded,
++    .dateModified,
+     .albumItemName,
++    .format,
+     .path,
+     .size,
+     .rating,
+diff --git a/lib/widgets/collection/collection_grid.dart b/lib/widgets/collection/collection_grid.dart
+index 25864e9..fc7e3e6 100644
+--- a/lib/widgets/collection/collection_grid.dart
++++ b/lib/widgets/collection/collection_grid.dart
+@@ -747,6 +747,9 @@ class _CollectionScrollViewState extends State<_CollectionScrollView> with Widge
+       case .path:
+         addAlbums(collection, sectionLayouts, crumbs);
+       case .rating:
++      case .dateAdded:
++      case .dateModified:
++      case .format:
+       case .size:
+       case .duration:
+       case .random:
+diff --git a/lib/widgets/collection/draggable_thumb_label.dart b/lib/widgets/collection/draggable_thumb_label.dart
+index 2fd6c0d..6874274 100644
+--- a/lib/widgets/collection/draggable_thumb_label.dart
++++ b/lib/widgets/collection/draggable_thumb_label.dart
+@@ -4,6 +4,7 @@ import 'package:aves/model/settings/settings.dart';
+ import 'package:aves/model/source/collection_lens.dart';
+ import 'package:aves/model/source/collection_source.dart';
+ import 'package:aves/utils/file_utils.dart';
++import 'package:aves/utils/time_utils.dart';
+ import 'package:aves/widgets/common/grid/draggable_thumb_label.dart';
+ import 'package:aves/widgets/common/grid/sections/list_layout.dart';
+ import 'package:material_ui/material_ui.dart';
+@@ -42,10 +43,19 @@ class const CollectionDraggableThumbLabel({
+               case .rating:
+                 throw UnimplementedError();
+             }
++          case .dateAdded:
++            final millis = entry.dateAddedSecs == null ? null : entry.dateAddedSecs! * 1000;
++            final date = dateTimeFromMillis(millis, isUtc: false);
++            return [DraggableThumbLabel.formatMonthThumbLabel(context, settings.avesLocale, date)];
++          case .dateModified:
++            final date = dateTimeFromMillis(entry.dateModifiedMillis, isUtc: false);
++            return [DraggableThumbLabel.formatMonthThumbLabel(context, settings.avesLocale, date)];
++          case .format:
++            return [entry.extension?.replaceFirst('.', '').toUpperCase() ?? ''];
+           case .albumItemName:
+             return [
+               if (_showAlbumName(context, entry)) _getAlbumName(context, entry),
+-              ?entry.bestTitle,
++              ?entry.fileNameWithoutExtension,
+             ];
+           case .rating:
+             final locale = settings.avesLocale;
+diff --git a/lib/widgets/collection/entry_set_action_delegate.dart b/lib/widgets/collection/entry_set_action_delegate.dart
+index 82ffa30..038dfe1 100644
+--- a/lib/widgets/collection/entry_set_action_delegate.dart
++++ b/lib/widgets/collection/entry_set_action_delegate.dart
+@@ -821,8 +821,17 @@ class EntrySetActionDelegate with FeedbackMixin, PermissionAwareMixin, SizeAware
+   }
+ 
+   void _goToSlideshow(BuildContext context) {
+-    final source = context.read<CollectionSource>();
+-    final entries = _getTargetItems(context).toList();
++    final collection = context.read<CollectionLens>();
++    final source = collection.source;
++    final isSelecting = context.read<Selection<AvesEntry>>().isSelecting;
++    final remaining = _getTargetItems(context).toSet();
++    // Flatten stacks in the current visual order, then append any selected items
++    // that are not part of the current filtered collection.
++    final entries = collection.sortedEntries
++        .expand((entry) => entry.stackedEntries ?? {entry})
++        .where((entry) => remaining.remove(entry))
++        .toList()
++      ..addAll(remaining);
+ 
+     Navigator.maybeOf(context)?.push(
+       MaterialPageRoute(
+@@ -831,6 +840,7 @@ class EntrySetActionDelegate with FeedbackMixin, PermissionAwareMixin, SizeAware
+           return SlideshowPage(
+             source: source,
+             sortedEntries: entries,
++            shuffle: isSelecting ? false : null,
+           );
+         },
+       ),
+diff --git a/lib/widgets/collection/grid/headers/any.dart b/lib/widgets/collection/grid/headers/any.dart
+index fa6e12f..1cf4356 100644
+--- a/lib/widgets/collection/grid/headers/any.dart
++++ b/lib/widgets/collection/grid/headers/any.dart
+@@ -64,6 +64,9 @@ class const CollectionSectionHeader({
+           rating: (sectionKey as EntryRatingSectionKey).rating,
+           selectable: selectable,
+         );
++      case .dateAdded:
++      case .dateModified:
++      case .format:
+       case .size:
+       case .duration:
+       case .random:
+diff --git a/lib/widgets/filter_grids/common/action_delegates/chip_set.dart b/lib/widgets/filter_grids/common/action_delegates/chip_set.dart
+index 6b9ca2c..8a0262c 100644
+--- a/lib/widgets/filter_grids/common/action_delegates/chip_set.dart
++++ b/lib/widgets/filter_grids/common/action_delegates/chip_set.dart
+@@ -240,10 +240,7 @@ abstract class ChipSetActionDelegate<T extends CollectionFilter> with FeedbackMi
+     return selection.isSelecting ? selection.selectedItems.map((v) => v.filter).toSet() : {};
+   }
+ 
+-  Iterable<AvesEntry> _selectedEntries(BuildContext context) {
+-    final source = context.read<CollectionSource>();
+-    final visibleEntries = source.visibleEntries;
+-
++  Set<CollectionFilter> _selectedEntryFilters(BuildContext context) {
+     final filters = <CollectionFilter>{};
+     // use user selected filters, if any
+     filters.addAll(getSelectedFilters(context));
+@@ -254,16 +251,19 @@ abstract class ChipSetActionDelegate<T extends CollectionFilter> with FeedbackMi
+       if (groupUri != null) {
+         final grouping = FilterGrouping.forUri(groupUri);
+         if (grouping != null) {
+-          final groupContent = grouping.getDirectChildren(groupUri);
+-          filters.addAll(groupContent);
++          filters.addAll(grouping.getDirectChildren(groupUri));
+         }
+       }
+     }
++    return filters;
++  }
+ 
++  Iterable<AvesEntry> _selectedEntries(BuildContext context) {
++    final visibleEntries = context.read<CollectionSource>().visibleEntries;
++    final filters = _selectedEntryFilters(context);
+     if (filters.isNotEmpty) {
+       return visibleEntries.where((entry) => filters.any((f) => f.test(entry)));
+     }
+-
+     // default to all content
+     return visibleEntries;
+   }
+@@ -331,7 +331,18 @@ abstract class ChipSetActionDelegate<T extends CollectionFilter> with FeedbackMi
+ 
+   Future<void> _goToSlideshow(BuildContext context) async {
+     final source = context.read<CollectionSource>();
+-    final entries = _selectedEntries(context).toList();
++    final filters = _selectedEntryFilters(context);
++    final selectedEntries = _selectedEntries(context).toSet();
++    // Build a lens so a single selected stored album uses its individual sort;
++    // multiple albums and grouped selections naturally fall back to global sort.
++    final lensFilters = filters.length > 1 ? {SetOrFilter(filters)} : filters;
++    final lens = CollectionLens(source: source, filters: lensFilters, listenToSource: false);
++    final entries = lens.sortedEntries
++        .expand((entry) => entry.stackedEntries ?? {entry})
++        .where((entry) => selectedEntries.remove(entry))
++        .toList()
++      ..addAll(selectedEntries);
++    lens.dispose();
+ 
+     await Navigator.maybeOf(context)?.push(
+       MaterialPageRoute(
+diff --git a/lib/widgets/filter_grids/common/draggable_thumb_label.dart b/lib/widgets/filter_grids/common/draggable_thumb_label.dart
+index 7fad2a3..356ca7e 100644
+--- a/lib/widgets/filter_grids/common/draggable_thumb_label.dart
++++ b/lib/widgets/filter_grids/common/draggable_thumb_label.dart
+@@ -41,6 +41,9 @@ class FilterDraggableThumbLabel<T extends CollectionFilter> extends StatelessWid
+             return [
+               formatFileSize(settings.avesLocale, context.read<CollectionSource>().size(filterGridItem.filter)),
+             ];
++          case .dateAdded:
++          case .dateModified:
++          case .format:
+           case .albumItemName:
+           case .rating:
+           case .duration:
+diff --git a/lib/widgets/filter_grids/common/filter_nav_page.dart b/lib/widgets/filter_grids/common/filter_nav_page.dart
+index 0f398f3..18d540c 100644
+--- a/lib/widgets/filter_grids/common/filter_nav_page.dart
++++ b/lib/widgets/filter_grids/common/filter_nav_page.dart
+@@ -115,6 +115,9 @@ class FilterNavigationPage<T extends CollectionFilter, CSAD extends ChipSetActio
+         allMapEntries = toGridItem(source, filters);
+       case .path:
+         allMapEntries = toGridItem(source, filters)..sort(compareFiltersByPath);
++      case .dateAdded:
++      case .dateModified:
++      case .format:
+       case .albumItemName:
+       case .rating:
+       case .duration:
+diff --git a/lib/widgets/viewer/controls/controller.dart b/lib/widgets/viewer/controls/controller.dart
+index 0a9d7ad..a9f9636 100644
+--- a/lib/widgets/viewer/controls/controller.dart
++++ b/lib/widgets/viewer/controls/controller.dart
+@@ -14,7 +14,16 @@ import 'package:leak_tracker/leak_tracker.dart';
+ class ViewerController with CastMixin {
+   final ValueNotifier<AvesEntry?> entryNotifier = ValueNotifier(null);
+   final ViewerTransition transition;
+-  final Duration? autopilotInterval;
++  Duration? _autopilotInterval;
++  Duration? get autopilotInterval => _autopilotInterval;
++
++  set autopilotInterval(Duration? value) {
++    if (_autopilotInterval == value) return;
++    _autopilotInterval = value;
++    _clearAutopilotAnimations();
++    _restartPlayTimer();
++  }
++
+   final bool autopilotAnimatedZoom;
+   final bool repeat;
+ 
+@@ -29,6 +38,12 @@ class ViewerController with CastMixin {
+ 
+   Stream<ViewerShowNextEvent> get showNextCommands => _events.where((event) => event is ViewerShowNextEvent).cast<ViewerShowNextEvent>();
+ 
++  Stream<ViewerShowPreviousEvent> get showPreviousCommands => _events.where((event) => event is ViewerShowPreviousEvent).cast<ViewerShowPreviousEvent>();
++
++  void showNext() => _streamController.add(ViewerShowNextEvent());
++
++  void showPrevious() => _streamController.add(ViewerShowPreviousEvent());
++
+   Stream<ViewerOverlayToggleEvent> get overlayCommands => _events.where((event) => event is ViewerOverlayToggleEvent).cast<ViewerOverlayToggleEvent>();
+ 
+   bool get autopilot => _autopilotNotifier.value;
+@@ -47,9 +62,10 @@ class ViewerController with CastMixin {
+     this.transition = ViewerTransition.parallax,
+     this.repeat = false,
+     bool autopilot = false,
+-    this.autopilotInterval,
++    Duration? autopilotInterval,
+     this.autopilotAnimatedZoom = false,
+   }) {
++    _autopilotInterval = autopilotInterval;
+     if (kFlutterMemoryAllocationsEnabled) {
+       LeakTracking.dispatchObjectCreated(
+         library: 'aves',
+@@ -89,13 +105,19 @@ class ViewerController with CastMixin {
+ 
+   void _onAutopilotChanged() {
+     _clearAutopilotAnimations();
+-    _stopPlayTimer();
++    _restartPlayTimer();
+     if (autopilot && autopilotInterval != null) {
+-      _playTimer = Timer.periodic(autopilotInterval!, (_) => _streamController.add(ViewerShowNextEvent()));
+       _streamController.add(const ViewerOverlayToggleEvent(visible: false));
+     }
+   }
+ 
++  void _restartPlayTimer() {
++    _stopPlayTimer();
++    if (autopilot && autopilotInterval != null) {
++      _playTimer = Timer.periodic(autopilotInterval!, (_) => showNext());
++    }
++  }
++
+   void _stopPlayTimer() => _playTimer?.cancel();
+ 
+   void _clearAutopilotAnimations() => _autopilotAnimators.keys.toSet().forEach((v) => stopAutopilotAnimation(vsync: v));
+diff --git a/lib/widgets/viewer/controls/events.dart b/lib/widgets/viewer/controls/events.dart
+index dd97085..534e96d 100644
+--- a/lib/widgets/viewer/controls/events.dart
++++ b/lib/widgets/viewer/controls/events.dart
+@@ -3,6 +3,9 @@ import 'package:flutter/foundation.dart';
+ @immutable
+ class ViewerShowNextEvent;
+ 
++@immutable
++class ViewerShowPreviousEvent;
++
+ @immutable
+ class ViewerOverlayToggleEvent {
+   final bool? visible;
+diff --git a/lib/widgets/viewer/entry_vertical_pager.dart b/lib/widgets/viewer/entry_vertical_pager.dart
+index 858b6c5..e438d32 100644
+--- a/lib/widgets/viewer/entry_vertical_pager.dart
++++ b/lib/widgets/viewer/entry_vertical_pager.dart
+@@ -110,6 +110,11 @@ class _ViewerVerticalPageViewState extends State<ViewerVerticalPageView> {
+         _goToHorizontalPage(1, animate: true);
+       }),
+     );
++    _subscriptions.add(
++      widget.viewerController.showPreviousCommands.listen((event) {
++        _goToHorizontalPage(-1, animate: true);
++      }),
++    );
+     _subscriptions.add(
+       widget.viewerController.overlayCommands.listen((event) {
+         ToggleOverlayNotification(visible: event.visible).dispatch(context);
+diff --git a/lib/widgets/viewer/entry_viewer_stack.dart b/lib/widgets/viewer/entry_viewer_stack.dart
+index f486a9a..ad7188e 100644
+--- a/lib/widgets/viewer/entry_viewer_stack.dart
++++ b/lib/widgets/viewer/entry_viewer_stack.dart
+@@ -416,6 +416,8 @@ class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewContr
+         alignment: .bottomEnd,
+         child: SlideshowBottomOverlay(
+           animationController: _overlayAnimationController,
++          viewerController: viewerController,
++          entries: collection?.sortedEntries ?? const [],
+           availableSize: availableSize,
+           viewInsets: _frozenViewInsets,
+           viewPadding: _frozenViewPadding,
+diff --git a/lib/widgets/viewer/overlay/bottom/slideshow_buttons.dart b/lib/widgets/viewer/overlay/bottom/slideshow_buttons.dart
+index b1fdbd2..87b0dde 100644
+--- a/lib/widgets/viewer/overlay/bottom/slideshow_buttons.dart
++++ b/lib/widgets/viewer/overlay/bottom/slideshow_buttons.dart
+@@ -1,3 +1,4 @@
++import 'package:aves/model/entry/entry.dart';
+ import 'package:aves/model/settings/settings.dart';
+ import 'package:aves/view/view.dart';
+ import 'package:aves/widgets/common/extensions/media_query.dart';
+@@ -7,6 +8,7 @@ import 'package:aves/widgets/viewer/controls/intents.dart';
+ import 'package:aves/widgets/viewer/controls/notifications.dart';
+ import 'package:aves/widgets/viewer/overlay/bottom/bottom.dart';
+ import 'package:aves/widgets/viewer/overlay/bottom/viewer_buttons.dart';
++import 'package:aves/widgets/viewer/controls/controller.dart';
+ import 'package:aves/widgets/viewer/slideshow_page.dart';
+ import 'package:aves_model/aves_model.dart';
+ import 'package:collection/collection.dart';
+@@ -20,6 +22,8 @@ class const SlideshowBottomOverlay({
+   required final Size availableSize,
+   final EdgeInsets? viewInsets,
+   final EdgeInsets? viewPadding,
++  required final ViewerController viewerController,
++  required final List<AvesEntry> entries,
+ }) extends StatelessWidget {
+   @override
+   Widget build(BuildContext context) {
+@@ -36,6 +40,8 @@ class const SlideshowBottomOverlay({
+         viewInsets: viewInsets,
+         viewPadding: viewPadding,
+         animationController: animationController,
++        viewerController: viewerController,
++        entries: entries,
+       ),
+     );
+   }
+@@ -47,6 +53,8 @@ class const SlideshowButtons({
+   required final EdgeInsets? viewInsets,
+   required final EdgeInsets? viewPadding,
+   required final AnimationController animationController,
++  required final ViewerController viewerController,
++  required final List<AvesEntry> entries,
+ }) extends StatefulWidget {
+   @override
+   State<SlideshowButtons> createState() => _SlideshowButtonsState();
+@@ -57,7 +65,10 @@ class _SlideshowButtonsState extends State<SlideshowButtons> {
+   late CurvedAnimation _buttonScale;
+ 
+   static const List<SlideshowAction> _actions = [
++    SlideshowAction.previous,
+     SlideshowAction.resume,
++    SlideshowAction.next,
++    SlideshowAction.interval,
+     SlideshowAction.showInCollection,
+     SlideshowAction.cast,
+     SlideshowAction.settings,
+@@ -128,12 +139,37 @@ class _SlideshowButtonsState extends State<SlideshowButtons> {
+         mainAxisSize: .min,
+         crossAxisAlignment: .start,
+         children: [
++          _buildProgress(),
+           viewerButtonRow,
+         ],
+       ),
+     );
+   }
+ 
++  Widget _buildProgress() {
++    return ValueListenableBuilder<AvesEntry?>(
++      valueListenable: widget.viewerController.entryNotifier,
++      builder: (context, currentEntry, child) {
++        final index = currentEntry == null ? -1 : widget.entries.indexWhere((entry) => entry.uri == currentEntry.uri && entry.pageId == currentEntry.pageId);
++        final label = '${index < 0 ? 0 : index + 1} / ${widget.entries.length}';
++        final progress = index < 0 || widget.entries.isEmpty ? 0.0 : (index + 1) / widget.entries.length;
++        return Padding(
++          padding: const EdgeInsetsDirectional.only(start: 16, end: 16, bottom: 6),
++          child: Column(
++            crossAxisAlignment: CrossAxisAlignment.stretch,
++            children: [
++              Align(
++                alignment: AlignmentDirectional.centerEnd,
++                child: Text(label, style: Theme.of(context).textTheme.bodySmall),
++              ),
++              LinearProgressIndicator(value: progress, minHeight: 2),
++            ],
++          ),
++        );
++      },
++    );
++  }
++
+   Widget _buildButtons(BuildContext context) {
+     if (settings.useTvLayout) {
+       return _buildTvButtonRowContent(context);
+@@ -142,14 +178,19 @@ class _SlideshowButtonsState extends State<SlideshowButtons> {
+     return SafeArea(
+       top: false,
+       bottom: false,
+-      child: Padding(
+-        padding: const EdgeInsets.only(left: _padding / 2, right: _padding / 2, bottom: _padding),
+-        child: Row(
+-          textDirection: ViewerBottomOverlay.actionsDirection,
+-          children: [
+-            const Spacer(),
+-            ..._actions.map((action) => _buildOverlayButton(context, action)),
+-          ],
++      child: Align(
++        alignment: AlignmentDirectional.centerEnd,
++        child: SingleChildScrollView(
++          scrollDirection: Axis.horizontal,
++          reverse: true,
++          child: Padding(
++            padding: const EdgeInsets.only(left: _padding / 2, right: _padding / 2, bottom: _padding),
++            child: Row(
++              mainAxisSize: MainAxisSize.min,
++              textDirection: ViewerBottomOverlay.actionsDirection,
++              children: _actions.map((action) => _buildOverlayButton(context, action)).toList(),
++            ),
++          ),
+         ),
+       ),
+     );
+diff --git a/lib/widgets/viewer/slideshow_page.dart b/lib/widgets/viewer/slideshow_page.dart
+index 64928ff..27c048f 100644
+--- a/lib/widgets/viewer/slideshow_page.dart
++++ b/lib/widgets/viewer/slideshow_page.dart
+@@ -10,6 +10,8 @@ import 'package:aves/widgets/collection/collection_page.dart';
+ import 'package:aves/widgets/common/basic/scaffold.dart';
+ import 'package:aves/widgets/common/extensions/build_context.dart';
+ import 'package:aves/widgets/common/identity/empty.dart';
++import 'package:aves/widgets/dialogs/aves_dialog.dart';
++import 'package:aves/widgets/dialogs/duration_dialog.dart';
+ import 'package:aves/widgets/settings/viewer/slideshow_page.dart';
+ import 'package:aves/widgets/viewer/controls/controller.dart';
+ import 'package:aves/widgets/viewer/entry_viewer_stack.dart';
+@@ -25,6 +27,8 @@ class const SlideshowPage({
+   // do not pass a collection, as it may change section/sort
+   required final CollectionSource source,
+   required final List<AvesEntry> sortedEntries,
++  // A selected-photo slideshow preserves selection order, even when global shuffle is enabled.
++  final bool? shuffle,
+ }) extends StatefulWidget {
+   static const routeName = '/collection/slideshow';
+ 
+@@ -108,7 +112,7 @@ class _SlideshowPageState extends State<SlideshowPage> {
+     if (settings.slideshowVideoPlayback == SlideshowVideoPlayback.skip) {
+       entries = entries.where((entry) => !MimeFilter.video.test(entry)).toList();
+     }
+-    if (settings.slideshowShuffle) {
++    if (widget.shuffle ?? settings.slideshowShuffle) {
+       entries.shuffle();
+     }
+     _slideshowCollection = CollectionLens(
+@@ -123,8 +127,14 @@ class _SlideshowPageState extends State<SlideshowPage> {
+ 
+   void _onActionSelected(SlideshowAction action) {
+     switch (action) {
++      case .previous:
++        _viewerController.showPrevious();
+       case .resume:
+         _viewerController.autopilot = true;
++      case .next:
++        _viewerController.showNext();
++      case .interval:
++        _changeInterval(context);
+       case .showInCollection:
+         _showInCollection();
+       case .cast:
+@@ -135,6 +145,16 @@ class _SlideshowPageState extends State<SlideshowPage> {
+     }
+   }
+ 
++  Future<void> _changeInterval(BuildContext context) async {
++    final seconds = await showAvesDialog<int>(
++      context: context,
++      builder: (context) => DurationDialog(initialSeconds: settings.slideshowInterval),
++    );
++    if (!mounted || seconds == null) return;
++    settings.slideshowInterval = seconds;
++    _viewerController.autopilotInterval = Duration(seconds: seconds);
++  }
++
+   void _showInCollection() {
+     final currentEntry = _viewerController.entryNotifier.value;
+     if (currentEntry == null) return;
+diff --git a/plugins/aves_model/lib/src/actions/slideshow.dart b/plugins/aves_model/lib/src/actions/slideshow.dart
+index a4f7825..a6a47ae 100644
+--- a/plugins/aves_model/lib/src/actions/slideshow.dart
++++ b/plugins/aves_model/lib/src/actions/slideshow.dart
+@@ -1,5 +1,8 @@
+ enum SlideshowAction {
++  previous,
+   resume,
++  next,
++  interval,
+   showInCollection,
+   cast,
+   settings,
+diff --git a/plugins/aves_model/lib/src/settings/keys.dart b/plugins/aves_model/lib/src/settings/keys.dart
+index ad00775..20d47b8 100644
+--- a/plugins/aves_model/lib/src/settings/keys.dart
++++ b/plugins/aves_model/lib/src/settings/keys.dart
+@@ -75,6 +75,7 @@ class SettingKeys {
+   // collection
+   static const collectionBurstPatternsKey = 'collection_burst_patterns';
+   static const collectionSortFactorKey = 'collection_sort_factor';
++  static const collectionSortPerAlbumKey = 'collection_sort_per_album';
+   static const collectionSortReverseKey = 'collection_sort_reverse';
+   static const collectionSortRandomSeedKey = 'collection_sort_random_seed';
+   static const collectionSectionFactorKey = 'collection_group_factor';
+diff --git a/plugins/aves_model/lib/src/source/enums.dart b/plugins/aves_model/lib/src/source/enums.dart
+index 88c9c50..e941f09 100644
+--- a/plugins/aves_model/lib/src/source/enums.dart
++++ b/plugins/aves_model/lib/src/source/enums.dart
+@@ -3,6 +3,9 @@ enum SourceState { loading, cataloguing, locatingCountries, locatingPlaces, read
+ enum SortFactor {
+   // common
+   date,
++  dateAdded,
++  dateModified,
++  format,
+   size,
+   path,
+   // chips only
+diff --git a/pubspec.yaml b/pubspec.yaml
+index 0a5325d..241a613 100644
+--- a/pubspec.yaml
++++ b/pubspec.yaml
+@@ -8,7 +8,7 @@ publish_to: none
+ # - edit GitHub changelog:     /CHANGELOG.md
+ # - edit Play Store changelog: /whatsnew/whatsnew-en-US
+ # - run `scripts/apply_version_bump.sh`
+-version: 1.15.10+184
++version: 1.15.10-custom.1+185
+ 
+ environment:
+   # this project bundles Flutter SDK via `flutter_wrapper`
+diff --git a/scripts/build_custom_apk.sh b/scripts/build_custom_apk.sh
+new file mode 100755
+index 0000000..5eab2ab
+--- /dev/null
++++ b/scripts/build_custom_apk.sh
+@@ -0,0 +1,51 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++cd "$ROOT"
++
++if ! command -v flutter >/dev/null 2>&1; then
++  echo "ERROR: Flutter SDK is not installed or flutter is not on PATH." >&2
++  echo "Install Flutter 3.47.8 and Android SDK (platform 37), then retry." >&2
++  exit 2
++fi
++
++FLUTTER_VERSION="$(flutter --version 2>/dev/null | head -n 1 || true)"
++echo "Detected: $FLUTTER_VERSION"
++if [[ "$FLUTTER_VERSION" != *"3.47.8"* ]]; then
++  echo "ERROR: This source snapshot expects Flutter 3.47.8." >&2
++  exit 2
++fi
++
++if [[ ! -f android/key.properties ]]; then
++  echo "ERROR: android/key.properties is missing." >&2
++  echo "Copy android/key.properties.example to android/key.properties and configure a persistent signing keystore." >&2
++  exit 2
++fi
++
++if [[ -z "${ANDROID_HOME:-}" && -z "${ANDROID_SDK_ROOT:-}" ]]; then
++  echo "ERROR: Set ANDROID_HOME or ANDROID_SDK_ROOT to an installed Android SDK." >&2
++  exit 2
++fi
++
++flutter doctor -v
++# Select the non-Play flavor: this avoids requiring the upstream Firebase app registration.
++cp flavors/pubspec_izzy.yaml pubspec.yaml
++cp flavors/pubspec_izzy.lock pubspec.lock
++flutter pub get --enforce-lockfile
++flutter analyze
++flutter test
++flutter build apk --flavor izzy --release --no-pub
++
++APK="build/app/outputs/flutter-apk/app-izzy-release.apk"
++if [[ ! -s "$APK" ]]; then
++  echo "ERROR: Expected APK was not created at $APK" >&2
++  find build/app/outputs -maxdepth 3 -type f -name '*.apk' -print 2>/dev/null || true
++  exit 3
++fi
++
++if command -v apksigner >/dev/null 2>&1; then
++  apksigner verify --verbose "$APK"
++fi
++sha256sum "$APK"
++echo "SUCCESS: $ROOT/$APK"
+diff --git a/test/model/entry_sort_custom_test.dart b/test/model/entry_sort_custom_test.dart
+new file mode 100644
+index 0000000..cdf9dc6
+--- /dev/null
++++ b/test/model/entry_sort_custom_test.dart
+@@ -0,0 +1,110 @@
++import 'package:aves/model/entry/sort.dart';
++import 'package:aves/model/settings/settings.dart';
++import 'package:aves/model/filters/covered/stored_album.dart';
++import 'package:aves_model/aves_model.dart';
++import 'package:flutter_test/flutter_test.dart';
++
++import '../common.dart';
++import '../fake/media_store_service.dart';
++
++void main() {
++  setUpAll(() async {
++    await setUpAllServices();
++  });
++
++  setUp(() async {
++    await setUpServices();
++  });
++
++  tearDownAll(() async {
++    await tearDownAllServices();
++  });
++
++  test('file name sorting uses the filesystem name, not the source title', () {
++    final alpha = FakeMediaStoreService.newImage('/storage/emulated/0/Pictures/test', 'a-file')..sourceTitle = 'Zulu title';
++    final zulu = FakeMediaStoreService.newImage('/storage/emulated/0/Pictures/test', 'z-file')..sourceTitle = 'Alpha title';
++    final entries = [zulu, alpha]..sort(AvesEntrySort.compareByName);
++    expect(entries, [alpha, zulu]);
++  });
++
++  test('date added and modified keep missing metadata last in both directions', () {
++    final newest = FakeMediaStoreService.newImage('/storage/emulated/0/Pictures/test', 'newest')
++      ..dateAddedSecs = 300
++      ..dateModifiedMillis = 300000;
++    final oldest = FakeMediaStoreService.newImage('/storage/emulated/0/Pictures/test', 'oldest')
++      ..dateAddedSecs = 100
++      ..dateModifiedMillis = 100000;
++    final unknown = FakeMediaStoreService.newImage('/storage/emulated/0/Pictures/test', 'unknown')
++      ..dateAddedSecs = 0
++      ..dateModifiedMillis = 0;
++
++    final addedDescending = [oldest, unknown, newest]..sort(AvesEntrySort.compareByDateAdded);
++    expect(addedDescending, [newest, oldest, unknown]);
++
++    final addedAscending = [oldest, unknown, newest]
++      ..sort((a, b) => AvesEntrySort.compareByDateAdded(a, b, reverse: true));
++    expect(addedAscending, [oldest, newest, unknown]);
++
++    final modifiedDescending = [oldest, unknown, newest]..sort(AvesEntrySort.compareByDateModified);
++    expect(modifiedDescending, [newest, oldest, unknown]);
++
++    final modifiedAscending = [oldest, unknown, newest]
++      ..sort((a, b) => AvesEntrySort.compareByDateModified(a, b, reverse: true));
++    expect(modifiedAscending, [oldest, newest, unknown]);
++  });
++
++  test('format and size keep missing metadata last in both directions', () {
++    final jpg = FakeMediaStoreService.newImage('/storage/emulated/0/Pictures/test', 'b')
++      ..path = '/storage/emulated/0/Pictures/test/b.jpg'
++      ..sizeBytes = 500;
++    final png = FakeMediaStoreService.newImage('/storage/emulated/0/Pictures/test', 'a')
++      ..path = '/storage/emulated/0/Pictures/test/a.png'
++      ..sizeBytes = 100;
++    final unknown = FakeMediaStoreService.newImage('/storage/emulated/0/Pictures/test', 'unknown')
++      ..path = null
++      ..sizeBytes = null;
++
++    final formatAscending = [unknown, jpg, png]..sort(AvesEntrySort.compareByFormat);
++    expect(formatAscending, [jpg, png, unknown]);
++
++    final formatDescending = [unknown, jpg, png]
++      ..sort((a, b) => AvesEntrySort.compareByFormat(a, b, reverse: true));
++    expect(formatDescending, [png, jpg, unknown]);
++
++    final sizeDescending = [unknown, png, jpg]..sort(AvesEntrySort.compareBySize);
++    expect(sizeDescending, [jpg, png, unknown]);
++
++    final sizeAscending = [unknown, png, jpg]
++      ..sort((a, b) => AvesEntrySort.compareBySize(a, b, reverse: true));
++    expect(sizeAscending, [png, jpg, unknown]);
++  });
++
++  test('individual album sorting is isolated from global sorting', () {
++    final albumA = {StoredAlbumFilter('/storage/emulated/0/Pictures/A', 'A')};
++    final albumB = {StoredAlbumFilter('/storage/emulated/0/Pictures/B', 'B')};
++
++    settings.setStoredCollectionSortFactor({}, .date);
++    settings.setStoredCollectionSortReverse({}, false);
++    settings.setStoredCollectionSectionFactor({}, .month);
++
++    settings.setStoredCollectionSortFactor(albumA, .dateAdded);
++    settings.setStoredCollectionSortReverse(albumA, true);
++    settings.setStoredCollectionSectionFactor(albumA, .none);
++
++    settings.setStoredCollectionSortFactor({}, .format);
++    settings.setStoredCollectionSortReverse({}, true);
++
++    expect(settings.getStoredCollectionSortFactor(albumA), SortFactor.dateAdded);
++    expect(settings.getStoredCollectionSortReverse(albumA), isTrue);
++    expect(settings.getStoredCollectionSectionFactor(albumA), EntrySectionFactor.none);
++
++    expect(settings.getStoredCollectionSortFactor(albumB), SortFactor.format);
++    expect(settings.getStoredCollectionSortReverse(albumB), isTrue);
++    expect(settings.getStoredCollectionSectionFactor(albumB), EntrySectionFactor.month);
++
++    settings.renameStoredCollectionSort('/storage/emulated/0/Pictures/A', '/storage/emulated/0/Pictures/Renamed');
++    final renamedAlbum = {StoredAlbumFilter('/storage/emulated/0/Pictures/Renamed', 'Renamed')};
++    expect(settings.getStoredCollectionSortFactor(renamedAlbum), SortFactor.dateAdded);
++    expect(settings.getStoredCollectionSortReverse(renamedAlbum), isTrue);
++  });
++}
